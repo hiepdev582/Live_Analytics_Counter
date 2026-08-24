@@ -1,0 +1,167 @@
+version: "3.8"
+
+services:
+  # ==========================================
+  # 1. DATABASE LAYER (PostgreSQL)
+  # ==========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: live_analytics_db
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d # Tự động chạy khi khởi động DB lần đầu
+    networks:
+      - analytics_net
+    healthcheck:
+      # Kiểm tra trạng thái hoạt động của PostgreSQL trước khi cho phép các service khác khởi chạy (hạn chế lỗi connect thất bại)
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================
+  # 2. CACHING & PUB/SUB LAYER (Redis)
+  # ==========================================
+  redis:
+    image: redis:7-alpine
+    container_name: live_analytics_redis
+    restart: always
+    # Khởi động Redis có bật cơ chế AOF (appendonly yes ghi log cập nhật xuống đĩa cứng để giảm thiểu mất dữ liệu khi crash) và yêu cầu mật khẩu truy cập
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - analytics_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis-insight:
+    image: redis/redisinsight:latest
+    container_name: live_analytics_redis_insight
+    restart: always
+    ports:
+      - "5540:5540"
+    networks:
+      - analytics_net
+
+  # ==========================================
+  # 3. MESSAGE BROKER LAYER (Kafka KRaft Mode)
+  # ==========================================
+  kafka:
+    image: bitnami/kafka:3.7
+    container_name: live_analytics_kafka
+    restart: always
+    ports:
+      - "9092:9092"
+      - "9094:9094"
+    environment:
+      # Định danh ID của node Kafka hiện tại trong cụm (cluster) là 1
+      - KAFKA_CFG_NODE_ID=1
+      # Chỉ định node này vừa làm nhiệm vụ điều phối dữ liệu (controller), vừa làm trung gian truyền tin (broker)
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      # Định nghĩa danh sách các controller tham gia bỏ phiếu trong cụm (ở đây chính là node 1 chạy trên cổng 9093)
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      # Định nghĩa danh sách các giao thức và cổng lắng nghe tương ứng (PLAINTEXT trên cổng 9092, CONTROLLER trên cổng 9093, và EXTERNAL trên cổng 9094)
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      # Địa chỉ mà Kafka quảng bá cho các client biết để kết nối tới (Client nội bộ qua host kafka:9092, Client máy thật qua localhost:9094)
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      # Ánh xạ tên listeners sang cơ thức bảo mật (ở đây đều dùng giao thức không mã hóa PLAINTEXT)
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      # Chỉ định listener tên CONTROLLER sẽ làm nhiệm vụ điều phối
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      # Dùng listener PLAINTEXT để các brokers giao tiếp nội bộ với nhau
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+      # Cho phép Kafka tự động tạo Topic mới khi có client gửi/nhận dữ liệu mà topic đó chưa tồn tại
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+    volumes:
+      - kafka_data:/bitnami/kafka
+    networks:
+      - analytics_net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "kafka-topics.sh",
+          "--bootstrap-server",
+          "localhost:9092",
+          "--list",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: live_analytics_kafka_ui
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=Local-Analytics-Cluster
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
+    networks:
+      - analytics_net
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # ==========================================
+  # 4. LOAD BALANCER & GATEWAY (NGINX)
+  # ==========================================
+  nginx:
+    image: nginx:alpine
+    container_name: live_analytics_nginx
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - analytics_net
+
+  # ==========================================
+  # 5. TESTING LAYER (Apache JMeter)
+  # ==========================================
+  jmeter:
+    image: justb4/jmeter:latest
+    container_name: live_analytics_jmeter
+    volumes:
+      - ./jmeter:/jmeter
+    entrypoint:
+      - jmeter
+      - -n # Chạy không cần giao diện (Non-GUI mode)
+      - -t # Chỉ định đường dẫn tới file kịch bản (.jmx)
+      - /jmeter/test-plan.jmx
+      - -l # File xuất kết quả thô (.jtl)
+      - /jmeter/results.jtl
+      - -e # Tự động xuất báo cáo Dashboard HTML
+      - -o # Thư mục chứa báo cáo HTML
+      - /jmeter/report
+    networks:
+      - analytics_net
+    profiles:
+      - test # Chỉ chạy khi gọi rõ ràng bằng docker compose --profile test up
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  kafka_data:
+    driver: local
+
+networks:
+  analytics_net:
+    driver: bridge
