@@ -57,6 +57,23 @@ graph TD
 - **Frontend:** Nuxt.js
 - **Load Balancer & Reverse Proxy:** Nginx (Round Robin)
 - **Containerization:** Docker & Docker Compose
+- **Performance Testing:** Apache JMeter (Dockerized)
+
+---
+
+## 📊 Hướng dẫn chạy Performance Test bằng JMeter
+
+1. **Chuẩn bị file kịch bản:** 
+   * Thiết kế kịch bản test bằng JMeter GUI ở máy thật của bạn.
+   * Lưu file kịch bản đó vào thư mục dự án: `./jmeter/test-plan.jmx`.
+   * Cấu hình tên server đích trong JMeter là `nginx` (cổng `80`) hoặc gọi trực tiếp backend `app_backend_1:8080` (do các container chạy chung mạng ảo).
+2. **Kích hoạt chạy Load Test:**
+   Chạy lệnh sau để Docker tự khởi chạy JMeter container và thực thi kịch bản ở chế độ CLI:
+   ```bash
+   docker compose --profile test up jmeter
+   ```
+3. **Xem báo cáo:**
+   Sau khi chạy xong, JMeter sẽ tự động xuất báo cáo Dashboard HTML đẹp mắt vào thư mục cục bộ của bạn tại `./jmeter/report/index.html`. Bạn chỉ cần mở file này bằng trình duyệt để phân tích kết quả.
 
 ---
 
