@@ -122,6 +122,36 @@
 import { ref, onMounted, onUnmounted } from "vue";
 import "./app.css";
 
+// Thiết lập SEO Meta Data
+useHead({
+  title:
+    "Live Analytics Counter - Hệ thống đếm lượt xem, lượt thích video trực tuyến",
+  meta: [
+    {
+      name: "description",
+      content: "Dịch vụ đếm lượt xem, lượt thích video trực tuyến tốc độ cao.",
+    },
+    {
+      name: "keywords",
+      content:
+        "live analytics counter, hệ thống đếm lượt xem, hệ thống đếm lượt thích, live streaming analytics, real-time analytics, video analytics",
+    },
+    {
+      property: "og:title",
+      content:
+        "Live Analytics Counter - Hệ thống đếm lượt xem, lượt thích video trực tuyến",
+    },
+    {
+      property: "og:description",
+      content: "Dịch vụ đếm lượt xem, lượt thích video trực tuyến tốc độ cao.",
+    },
+    { property: "og:type", content: "website" },
+  ],
+  htmlAttrs: {
+    lang: "vi",
+  },
+});
+
 const videos = ref([]);
 const selectedVideo = ref(null);
 const wsConnected = ref(false);
