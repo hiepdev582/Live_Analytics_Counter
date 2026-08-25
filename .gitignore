@@ -1,1 +1,7 @@
 .env
+
+# JMeter testing artifacts
+jmeter/*.jtl
+jmeter/report/
+jmeter/*.log
+jmeter.log
